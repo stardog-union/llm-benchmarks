@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import math
 from enum import Enum
 from transformers import AutoTokenizer
 from typing import List
@@ -11,8 +10,6 @@ import itertools
 import json
 import os
 import random
-import requests
-import sys
 import time
 import numpy as np
 
