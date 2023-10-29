@@ -12,6 +12,7 @@ import os
 import random
 import time
 import numpy as np
+from prettytable import PrettyTable
 
 
 def get_wait_time(mean_time_between_requests: float, distribution: str) -> float:
@@ -54,7 +55,7 @@ class GenerationBackend(str, Enum):
 async def query_model_hf(prompt, verbose, tokenizer, allow_variable_generation_length, total_requests, port):
     prompt, prompt_len, response_len = prompt
 
-    timeout = aiohttp.ClientTimeout(total=60*60)
+    timeout = aiohttp.ClientTimeout(total=60 * 60)
 
     response_len = max(response_len, 1)
 
@@ -83,7 +84,7 @@ async def query_model_hf(prompt, verbose, tokenizer, allow_variable_generation_l
 async def query_model_naive_hf(prompt, verbose, tokenizer, allow_variable_generation_length, total_requests, port):
     prompt, prompt_len, response_len = prompt
 
-    timeout = aiohttp.ClientTimeout(total=6*60*60)
+    timeout = aiohttp.ClientTimeout(total=6 * 60 * 60)
 
     bs = int(os.environ.get('NAIVE_HF_BS'))
 
@@ -119,7 +120,7 @@ async def query_model_naive_hf(prompt, verbose, tokenizer, allow_variable_genera
 async def query_model_ray(prompt, verbose, tokenizer, allow_variable_generation_length, total_requests, port):
     prompt, prompt_len, response_len = prompt
 
-    timeout = aiohttp.ClientTimeout(total=60*60)
+    timeout = aiohttp.ClientTimeout(total=60 * 60)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         generate_input = dict(
@@ -147,7 +148,7 @@ async def query_model_ray(prompt, verbose, tokenizer, allow_variable_generation_
 async def query_model_ft(prompt, verbose, tokenizer, allow_variable_generation_length, total_requests, port):
     prompt, prompt_len, response_len = prompt
 
-    timeout = aiohttp.ClientTimeout(total=4*60*60)
+    timeout = aiohttp.ClientTimeout(total=4 * 60 * 60)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         generate_input = dict(
@@ -187,15 +188,13 @@ async def query_model_ft(prompt, verbose, tokenizer, allow_variable_generation_l
 async def query_model_vllm(prompt, verbose, tokenizer, allow_variable_generation_length, total_requests, port):
     prompt, prompt_len, expected_response_len = prompt
 
-    timeout = aiohttp.ClientTimeout(total=4*60*60)
+    timeout = aiohttp.ClientTimeout(total=4 * 60 * 60)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         generate_input = dict(
-            inputs=prompt,
-            parameters=dict(
-                prompt_len=prompt_len,
-                reponse_len=expected_response_len,
-            ),
+            prompt=prompt,
+            temperature=0.2,
+            max_tokens=expected_response_len
         )
 
         if verbose:
@@ -207,8 +206,8 @@ async def query_model_vllm(prompt, verbose, tokenizer, allow_variable_generation
             output = await resp.json()
             # necessary for latency calc
             output['response_len'] = expected_response_len
-            if verbose and 'generated_text' in output:
-                print(json.dumps(output['generated_text']))
+            if verbose and 'text' in output:
+                print(json.dumps(output['text']))
 
             return (prompt, output)
 
@@ -226,7 +225,9 @@ def get_tok_id_lens(tokenizer, batch):
     return lens
 
 
-def calculate_throughput(queries, dur_s, backend, tokenizer, median_token_latency, median_e2e_latency, all_e2e_latencies, all_per_token_latencies, results_filename, log_latencies, fail_on_response_failure):
+def calculate_throughput(queries, verbose, dur_s, backend, tokenizer, median_token_latency, median_e2e_latency,
+                         all_e2e_latencies, all_per_token_latencies, results_filename, log_latencies,
+                         fail_on_response_failure):
     prompts = []
     responses = []
     naive_hf_lens = []
@@ -235,9 +236,9 @@ def calculate_throughput(queries, dur_s, backend, tokenizer, median_token_latenc
     ray_gen_lens = []
     cf_gen_lens = []
     for prompt, response in queries:
-        if 'generated_text' in response:
+        if 'text' in response:
             prompts.append(prompt)
-            responses.append(response['generated_text'])
+            responses.append(response['text'][0])
         if 'naive_hf_lens' in response:
             naive_hf_lens.append(response['naive_hf_lens'])
         if 'ray_gen_len' in response:
@@ -252,10 +253,11 @@ def calculate_throughput(queries, dur_s, backend, tokenizer, median_token_latenc
     response_ids = [r for r in tokenizer.batch_encode_plus(responses)[
         'input_ids']]
 
-    print(
-        f'check_len actual {list(sorted(len(response) for response in response_ids))}')
-    print(f'check_len expect {list(sorted(expected_response_lens))}')
-    print(f'   self-reported {list(sorted(cf_gen_lens))}')
+    if verbose:
+        print(
+            f'check_len actual {list(sorted(len(response) for response in response_ids))}')
+        print(f'check_len expect {list(sorted(expected_response_lens))}')
+        print(f'   self-reported {list(sorted(cf_gen_lens))}')
 
     # for prompt, response, expected_response_len in zip(prompt_ids, response_ids, expected_response_lens):
     #    print(f'check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
@@ -268,11 +270,12 @@ def calculate_throughput(queries, dur_s, backend, tokenizer, median_token_latenc
         print(responses)
         raise
 
-    print(f'naive_hf_lens {list(sorted(naive_hf_lens))}')
-    print(f'prompt_lens {list(sorted(prompt_lens))}')
-    print(f'calc_throughput response_lens {list(sorted(response_lens))}')
-    print(f'expected_response_lens {list(sorted(expected_response_lens))}')
-    print(f'ray_gen_lens {list(sorted(ray_gen_lens))}')
+    if verbose:
+        print(f'naive_hf_lens {list(sorted(naive_hf_lens))}')
+        print(f'prompt_lens {list(sorted(prompt_lens))}')
+        print(f'calc_throughput response_lens {list(sorted(response_lens))}')
+        print(f'expected_response_lens {list(sorted(expected_response_lens))}')
+        print(f'ray_gen_lens {list(sorted(ray_gen_lens))}')
 
     prompt_token_count = sum(prompt_lens)
     response_token_count = sum(response_lens)
@@ -313,17 +316,20 @@ def calculate_throughput(queries, dur_s, backend, tokenizer, median_token_latenc
         print(msg, file=f)
         print(msg)
 
+        percentiles = [50, 90, 99]
+        latency_percentiles = np.percentile(all_e2e_latencies, percentiles)
+        tbl = PrettyTable()
+        tbl.field_names = ["Total Time (s)", "Query Time (50%ile)", "Query Time (90%ile)", "Query Time (99%ile)",
+                           "Query/sec", "Token/sec"]
+        tbl.float_format = '1.3'
+        tbl.align = 'r'
+        tbl.align["Total Time"] = 'l'
+        tbl.add_row([dur_s, *latency_percentiles, qps, throughput_tok_s])
+        print(tbl)
+
     if fail_on_response_failure:
         assert len(responses) == len(
             queries), f"{fail_on_response_failure=}, expected number of successful respones to equal number of queries, got {len(responses)} vs {len(queries)}"
-
-
-def calculate_cdf(latencies):
-    hist, bin_edges = np.histogram(latencies)
-    cumsum = np.cumsum(hist)
-    print(f"{bin_edges=}")
-    print(f"{hist=}")
-    print(f"{cumsum=}")
 
 
 class MeasureLatency:
@@ -337,7 +343,7 @@ class MeasureLatency:
             prompt, output = await f(*args, **kwargs)
 
             # Do not record latency if request failed.
-            if 'generated_text' in output:
+            if 'text' in output:
                 latency = time.time() - start
                 self._latencies.append(latency)
                 try:
@@ -348,6 +354,7 @@ class MeasureLatency:
                     pass
 
             return prompt, output
+
         return measured
 
 
@@ -357,19 +364,18 @@ def get_token_ids(input_str, tokenizer):
 
 
 async def benchmark(
-    backend: GenerationBackend,
-    tokenizer,
-    prompts: List[str],
-    allow_variable_generation_length: bool,
-    verbose: bool,
-    results_filename: str,
-    port: int,
-    distribution: str,
-    qps: float,
-    log_latencies: bool,
-    fail_on_response_failure: bool,
+        backend: GenerationBackend,
+        tokenizer,
+        prompts: List[str],
+        allow_variable_generation_length: bool,
+        verbose: bool,
+        results_filename: str,
+        port: int,
+        distribution: str,
+        qps: float,
+        log_latencies: bool,
+        fail_on_response_failure: bool,
 ):
-
     if backend == GenerationBackend.vLLM:
         query_model = query_model_vllm
     elif backend == GenerationBackend.HfTextGenerationInference:
@@ -410,9 +416,9 @@ async def benchmark(
     median_token_latency = np.median(m._per_token_latencies)
     median_e2e_latency = np.median(m._latencies)
 
-    calculate_throughput(queries, dur_s, backend, tokenizer, median_token_latency, median_e2e_latency,
-                         m._latencies, m._per_token_latencies, results_filename, log_latencies, fail_on_response_failure)
-    calculate_cdf(m._latencies)
+    calculate_throughput(queries, verbose, dur_s, backend, tokenizer, median_token_latency, median_e2e_latency,
+                         m._latencies, m._per_token_latencies, results_filename, log_latencies,
+                         fail_on_response_failure)
 
 
 def gen_random_response_lens(distribution: str, len_mean, len_range, num_prompts):
@@ -447,7 +453,6 @@ def gen_random_prompts(tokenizer, len_mean, len_range, num_prompts, vocab_ids_to
 
 
 def gen_random_prompts_return_lens(tokenizer, len_mean, len_range, num_prompts, vocab_ids_to_exclude=[]):
-
     low = len_mean - (len_range // 2)
     high = len_mean + (len_range // 2)
     vocab_ids = list(set(tokenizer.get_vocab().values()) -
@@ -504,7 +509,7 @@ def main():
     parser.add_argument('--variable_response_lens_mean', type=int)
     parser.add_argument('--variable_response_lens_range', type=int)
     parser.add_argument('--variable_response_lens_distribution', choices=[
-                        "uniform", "exponential", "capped_exponential"], default="uniform")
+        "uniform", "exponential", "capped_exponential"], default="uniform")
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--prompts_filename', type=str)
@@ -545,7 +550,8 @@ def main():
 
     if args.allow_variable_generation_length:
         response_lens = gen_random_response_lens(
-            args.variable_response_lens_distribution, args.variable_response_lens_mean, args.variable_response_lens_range, num_prompts=num_prompts)
+            args.variable_response_lens_distribution, args.variable_response_lens_mean,
+            args.variable_response_lens_range, num_prompts=num_prompts)
         args.fixed_max_tokens = -1
     else:
         response_lens = [args.fixed_max_tokens for _ in range(num_prompts)]
@@ -563,7 +569,7 @@ def main():
         print('Exiting...')
         return
 
-    if args.verbose or True:
+    if args.verbose:
         print('prompt lens', prompt_lens)
         print('response lens', response_lens)
 
@@ -586,7 +592,7 @@ def main():
         args.distribution,
         args.qps,
         args.log_latencies,
-        args.fail_on_response_failure,
+        args.fail_on_response_failure
     ))
 
 
